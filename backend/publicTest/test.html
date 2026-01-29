@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>mediasoup SFU test</title>
+    <style>
+      body {
+        font-family: sans-serif;
+      }
+      video {
+        width: 400px;
+        border: 1px solid #333;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>mediasoup SFU video test</h2>
+    <p id="role"></p>
+
+    <video id="video" autoplay playsinline></video>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module">
+       import * as mediasoupClient from "https://cdn.jsdelivr.net/npm/mediasoup-client@3/dist/mediasoup-client.min.js";
+
+      const socket = io();
+
+      const params = new URLSearchParams(window.location.search);
+      const role = params.get("role"); // "pub" or "view"
+      document.getElementById("role").innerText = "Role: " + role;
+
+      let device;
+      let sendTransport;
+      let recvTransport;
+      let producer;
+
+      async function getRtpCapabilities() {
+        return new Promise((resolve, reject) => {
+          socket.emit("getRtpCapabilities", (response) => {
+            if (response.error) reject(response.error);
+            else resolve(response.rtpCapabilities);
+          });
+        });
+      }
+
+      async function createTransport(direction) {
+        return new Promise((resolve, reject) => {
+          socket.emit("createWebRtcTransport", { direction }, (response) => {
+            if (response.error) reject(response.error);
+            else resolve(response.transportOptions);
+          });
+        });
+      }
+
+      async function connectTransport(direction, dtlsParameters) {
+        return new Promise((resolve, reject) => {
+          socket.emit(
+            "connectTransport",
+            { direction, dtlsParameters },
+            (response) => {
+              if (response?.error) reject(response.error);
+              else resolve();
+            }
+          );
+        });
+      }
+
+      async function start() {
+        const rtpCapabilities = await getRtpCapabilities();
+
+        device = new mediasoupClient.Device();
+        await device.load({ routerRtpCapabilities: rtpCapabilities });
+
+        if (role === "pub") {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
+          document.getElementById("video").srcObject = stream;
+
+          const transportOptions = await createTransport("send");
+          sendTransport = device.createSendTransport(transportOptions);
+
+          sendTransport.on("connect", ({ dtlsParameters }, cb, errCb) => {
+            connectTransport("send", dtlsParameters).then(cb).catch(errCb);
+          });
+
+          sendTransport.on(
+            "produce",
+            ({ kind, rtpParameters }, cb, errCb) => {
+              socket.emit(
+                "produce",
+                { kind, rtpParameters },
+                (response) => {
+                  if (response.error) errCb(response.error);
+                  else cb({ id: response.id });
+                }
+              );
+            }
+          );
+
+          const track = stream.getVideoTracks()[0];
+          producer = await sendTransport.produce({ track });
+
+          console.log("VIDEO PRODUCER ID:", producer.id);
+          alert("Producer ID (copy this):\n" + producer.id);
+        }
+
+        if (role === "view") {
+          const producerId = prompt("Enter producerId to consume:");
+          if (!producerId) return;
+
+          const transportOptions = await createTransport("recv");
+          recvTransport = device.createRecvTransport(transportOptions);
+
+          recvTransport.on("connect", ({ dtlsParameters }, cb, errCb) => {
+            connectTransport("recv", dtlsParameters).then(cb).catch(errCb);
+          });
+
+          socket.emit(
+            "consume",
+            {
+              producerId,
+              rtpCapabilities: device.rtpCapabilities
+            },
+            async (response) => {
+              if (response.error) {
+                console.error(response.error);
+                return;
+              }
+
+              const consumer = await recvTransport.consume(response);
+              const stream = new MediaStream();
+              stream.addTrack(consumer.track);
+              document.getElementById("video").srcObject = stream;
+              await consumer.resume();
+            }
+          );
+        }
+      }
+
+      start().catch(console.error);
+    </script>
+  </body>
+</html>
