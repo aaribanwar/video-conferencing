@@ -1,20 +1,27 @@
-import { getMediasoupRouter, getRtpCapabilities } from "../../mediasoup/router.js";
+import {
+  getMediasoupRouter,
+  getRtpCapabilities
+} from "../../mediasoup/router.js";
 import { webRtcTransportOptions } from "../../mediasoup/config.js";
+
+// ---- GLOBAL (v1) ----
+// producerId -> producer
+const producers = new Map();
 
 export function registerMediasoupHandlers(socket) {
   console.log("registering mediasoup handlers");
 
-  
+  // ---------------- RTP CAPS ----------------
   socket.on("getRtpCapabilities", (callback) => {
     try {
-      const rtpCapabilities = getMediasoupRouter().rtpCapabilities;
-      callback({ rtpCapabilities });
+      callback({ rtpCapabilities: getRtpCapabilities() });
     } catch (err) {
       console.error("getRtpCapabilities failed", err);
       callback({ error: "Failed to get RTP capabilities" });
     }
   });
 
+  // ---------------- TRANSPORT ----------------
   socket.on("createWebRtcTransport", async ({ direction }, callback) => {
     if (direction !== "send" && direction !== "recv") {
       return callback({ error: "Invalid transport direction" });
@@ -27,19 +34,15 @@ export function registerMediasoupHandlers(socket) {
         webRtcTransportOptions
       );
 
-      // IMPORTANT: track transports per socket (temporary, v1)
-      socket.data = socket.data || {};
-      socket.data.transports = socket.data.transports || {};
+      socket.data.transports ??= {};
       socket.data.transports[direction] = transport;
 
-      transport.on("dtlsstatechange", (dtlsState) => {
-        if (dtlsState === "closed") {
-          transport.close();
-        }
+      transport.on("dtlsstatechange", (state) => {
+        if (state === "closed") transport.close();
       });
 
       transport.on("close", () => {
-        console.log(`Transport closed (${direction}) for socket ${socket.id}`);
+        console.log(`Transport closed (${direction}) ${socket.id}`);
       });
 
       callback({
@@ -56,39 +59,31 @@ export function registerMediasoupHandlers(socket) {
     }
   });
 
-
-  socket.on(
-  "connectTransport",
-  async ({ direction, dtlsParameters }, callback) => {
+  socket.on("connectTransport", async ({ direction, dtlsParameters }, callback) => {
     try {
-      if (!socket.data?.transports?.[direction]) {
+      const transport = socket.data?.transports?.[direction];
+      if (!transport) {
         return callback({ error: "Transport not found" });
       }
 
-      const transport = socket.data.transports[direction];
-
-      await transport.connect({ dtlsParameters });
-
+      // ---- IMPORTANT GUARD ----
       if (transport.dtlsState === "connected") {
-      console.warn(`Transport already connected (${direction}) for socket ${socket.id}`);
-       return callback({ connected: true });
+        return callback({ connected: true });
       }
 
-
+      await transport.connect({ dtlsParameters });
       callback({ connected: true });
     } catch (err) {
       console.error("connectTransport failed", err);
       callback({ error: "Failed to connect transport" });
     }
-  }
-);
+  });
 
-socket.on(
-  "produce",
-  async ({ kind, rtpParameters, appData }, callback) => {
+  // ---------------- PRODUCE ----------------
+  socket.on("produce", async ({ kind, rtpParameters, appData }, callback) => {
     try {
       if (kind !== "video") {
-        return callback({ error: "Only video is supported right now" });
+        return callback({ error: "Only video supported (v1)" });
       }
 
       const transport = socket.data?.transports?.send;
@@ -102,36 +97,45 @@ socket.on(
         appData
       });
 
-      // Track producer on socket (temporary)
-      socket.data.producers = socket.data.producers || {};
-      socket.data.producers.video = producer;
+      //here we may add the findCheck // ---- track producers per socket (ownership) ----
+               socket.data.producers ??= {};
+               socket.data.producers[producer.id] = producer;
+
+// ---- track globally (SFU registry) ----
+producers.set(producer.id, producer);
+
+      producers.set(producer.id, producer);
 
       producer.on("transportclose", () => {
-        console.log("Video producer transport closed");
+        producers.delete(producer.id);
         producer.close();
       });
 
       producer.on("close", () => {
-        console.log("Video producer closed");
+        producers.delete(producer.id);
       });
 
       callback({ id: producer.id });
     } catch (err) {
-      console.error("produce video failed", err);
-      callback({ error: "Failed to produce video" });
+      console.error("produce failed", err);
+      callback({ error: "Failed to produce" });
     }
-  }
-);
+  });
 
+  // ---------------- PRODUCER LIST ----------------
+  socket.on("getProducers", (callback) => {
+    callback({
+      producerIds: Array.from(producers.keys())
+    });
+  });
 
-socket.on(
-  "consume",
-  async ({ producerId, rtpCapabilities }, callback) => {
+  // ---------------- CONSUME ----------------
+  socket.on("consume", async ({ producerId, rtpCapabilities }, callback) => {
     try {
       const router = getMediasoupRouter();
 
       if (!router.canConsume({ producerId, rtpCapabilities })) {
-        return callback({ error: "Cannot consume this producer" });
+        return callback({ error: "Cannot consume producer" });
       }
 
       const transport = socket.data?.transports?.recv;
@@ -142,33 +146,44 @@ socket.on(
       const consumer = await transport.consume({
         producerId,
         rtpCapabilities,
-        paused: true // start paused, client resumes explicitly
+        paused: false // v1: flow immediately
       });
 
-      socket.data.consumers = socket.data.consumers || {};
+      socket.data.consumers ??= {};
       socket.data.consumers[consumer.id] = consumer;
 
       consumer.on("transportclose", () => {
-        console.log("Consumer transport closed");
+        delete socket.data.consumers[consumer.id];
       });
 
       consumer.on("producerclose", () => {
-        console.log("Producer closed, consumer closing");
         consumer.close();
         delete socket.data.consumers[consumer.id];
       });
 
       callback({
-        id: consumer.id,
-        producerId,
-        kind: consumer.kind,
-        rtpParameters: consumer.rtpParameters
+        consumerParameters: {
+          id: consumer.id,
+          producerId,
+          kind: consumer.kind,
+          rtpParameters: consumer.rtpParameters
+        }
       });
     } catch (err) {
       console.error("consume failed", err);
       callback({ error: "Failed to consume" });
     }
+  });
+
+  socket.on("disconnect", () => {
+  console.log("Socket disconnected:", socket.id);
+
+  if (socket.data?.producers) {
+    Object.values(socket.data.producers).forEach((producer) => {
+      producers.delete(producer.id);
+      producer.close();
+    });
   }
-);
+});
 
 }
