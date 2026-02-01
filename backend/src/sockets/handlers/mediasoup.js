@@ -1,7 +1,10 @@
-import { getMediasoupRouter } from "../../mediasoup/router.js";
+import { getMediasoupRouter, getRtpCapabilities } from "../../mediasoup/router.js";
 import { webRtcTransportOptions } from "../../mediasoup/config.js";
 
 export function registerMediasoupHandlers(socket) {
+  console.log("registering mediasoup handlers");
+
+  
   socket.on("getRtpCapabilities", (callback) => {
     try {
       const rtpCapabilities = getMediasoupRouter().rtpCapabilities;
@@ -65,6 +68,12 @@ export function registerMediasoupHandlers(socket) {
       const transport = socket.data.transports[direction];
 
       await transport.connect({ dtlsParameters });
+
+      if (transport.dtlsState === "connected") {
+      console.warn(`Transport already connected (${direction}) for socket ${socket.id}`);
+       return callback({ connected: true });
+      }
+
 
       callback({ connected: true });
     } catch (err) {
