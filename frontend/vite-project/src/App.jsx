@@ -114,6 +114,8 @@ export default function App() {
         recvTransportRef.current = recvTransport;
 
         recvTransport.on("connect", ({ dtlsParameters }, cb, errCb) => {
+          console.log("recvTransport connected, it is logged from app.jsx");
+
           socket.emit(
             "connectTransport",
             { direction: "recv", dtlsParameters },
@@ -173,6 +175,8 @@ export default function App() {
 await consumer.resume();
 
 const remoteVideo = document.createElement("video");
+console.log("video track object?");
+
 remoteVideo.srcObject = new MediaStream([consumer.track]);
 remoteVideo.autoplay = true;
 remoteVideo.playsInline = true;
@@ -180,6 +184,7 @@ remoteVideo.muted = true; // 🔑 REQUIRED for autoplay
 remoteVideo.style.width = "300px";
 remoteVideo.style.border = "1px solid black";
 
+console.log(remoteVideo);
 document.body.appendChild(remoteVideo);
 
         }
@@ -196,6 +201,8 @@ document.body.appendChild(remoteVideo);
       console.log("Cleaning up mediasoup session");
 
       try {
+        console.log("Cleaning up");
+        
         consumersRef.current.forEach((c) => c.close());
         consumersRef.current.clear();
 

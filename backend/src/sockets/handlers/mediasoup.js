@@ -14,6 +14,7 @@ export function registerMediasoupHandlers(socket) {
   // ---------------- RTP CAPS ----------------
   socket.on("getRtpCapabilities", (callback) => {
     try {
+      console.log("Getting rtp capabilities");
       callback({ rtpCapabilities: getRtpCapabilities() });
     } catch (err) {
       console.error("getRtpCapabilities failed", err);
@@ -36,7 +37,7 @@ export function registerMediasoupHandlers(socket) {
 
       socket.data.transports ??= {};
       socket.data.transports[direction] = transport;
-
+      console.log("Transport created ");
       transport.on("dtlsstatechange", (state) => {
         if (state === "closed") transport.close();
       });
@@ -72,6 +73,7 @@ export function registerMediasoupHandlers(socket) {
       }
 
       await transport.connect({ dtlsParameters });
+      console.log("Transport connected in mediasoup.js");
       callback({ connected: true });
     } catch (err) {
       console.error("connectTransport failed", err);
@@ -104,8 +106,9 @@ export function registerMediasoupHandlers(socket) {
 // ---- track globally (SFU registry) ----
 producers.set(producer.id, producer);
 
-      producers.set(producer.id, producer);
+    //  producers.set(producer.id, producer);
 
+    console.log("Checking production logs");
       producer.on("transportclose", () => {
         producers.delete(producer.id);
         producer.close();
@@ -148,6 +151,8 @@ producers.set(producer.id, producer);
         rtpCapabilities,
         paused: false // v1: flow immediately
       });
+
+      console.log("COnsume check in mediasoup");
 
       socket.data.consumers ??= {};
       socket.data.consumers[consumer.id] = consumer;
